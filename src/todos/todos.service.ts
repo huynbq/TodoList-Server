@@ -20,10 +20,10 @@ type TodoCursor = {
 export class TodosService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(query: ListTodosDto) {
+  async list(userId: string, query: ListTodosDto) {
     const limit = Math.min(query.limit ?? 50, 100);
     const offset = query.offset ?? 0;
-    const where = this.buildWhere(query);
+    const where = this.buildWhere(userId, query);
     const cursor = query.cursor ? this.decodeCursor(query.cursor) : null;
     const shouldCount = !cursor && !query.search && query.status === TodoStatusDto.all;
 
@@ -58,16 +58,20 @@ export class TodosService {
     };
   }
 
-  async create(dto: CreateTodoDto) {
-    const order = dto.order ?? (await this.nextOrder());
+  async create(userId: string, dto: CreateTodoDto) {
+    const order = dto.order ?? (await this.nextOrder(userId));
     const todo = await this.prisma.todo.create({
       data: {
+        userId,
         title: dto.title,
         description: dto.description,
         status: this.toPrismaStatus(dto.status),
         order,
         dueDateTime: new Date(dto.dueDateTime),
         startDateTime: new Date(dto.startDateTime),
+        reminderDateTime: dto.reminderDateTime ? new Date(dto.reminderDateTime) : null,
+        reminderSent: false,
+        reminderSentAt: null,
         color: dto.color,
       },
     });
@@ -75,9 +79,10 @@ export class TodosService {
     return this.serialize(todo);
   }
 
-  async update(id: string, dto: UpdateTodoDto) {
-    await this.ensureExists(id);
+  async update(userId: string, id: string, dto: UpdateTodoDto) {
+    await this.ensureExists(userId, id);
 
+    const reminderDateTimeChanged = dto.reminderDateTime !== undefined;
     const todo = await this.prisma.todo.update({
       where: { id },
       data: {
@@ -87,6 +92,13 @@ export class TodosService {
         order: dto.order,
         dueDateTime: dto.dueDateTime ? new Date(dto.dueDateTime) : undefined,
         startDateTime: dto.startDateTime ? new Date(dto.startDateTime) : undefined,
+        reminderDateTime: reminderDateTimeChanged
+          ? dto.reminderDateTime
+            ? new Date(dto.reminderDateTime)
+            : null
+          : undefined,
+        reminderSent: reminderDateTimeChanged ? false : dto.reminderSent,
+        reminderSentAt: reminderDateTimeChanged ? null : dto.reminderSentAt ? new Date(dto.reminderSentAt) : undefined,
         color: dto.color,
       },
     });
@@ -94,8 +106,8 @@ export class TodosService {
     return this.serialize(todo);
   }
 
-  async toggleStatus(id: string) {
-    const current = await this.ensureExists(id);
+  async toggleStatus(userId: string, id: string) {
+    const current = await this.ensureExists(userId, id);
     const todo = await this.prisma.todo.update({
       where: { id },
       data: {
@@ -106,8 +118,8 @@ export class TodosService {
     return this.serialize(todo);
   }
 
-  async updateOrder(id: string, order: number) {
-    await this.ensureExists(id);
+  async updateOrder(userId: string, id: string, order: number) {
+    await this.ensureExists(userId, id);
 
     const todo = await this.prisma.todo.update({
       where: { id },
@@ -117,7 +129,7 @@ export class TodosService {
     return this.serialize(todo);
   }
 
-  async reorder(id: string, dto: ReorderTodoDto) {
+  async reorder(userId: string, id: string, dto: ReorderTodoDto) {
     this.validateId(id);
 
     if (dto.previousId) {
@@ -137,14 +149,14 @@ export class TodosService {
     }
 
     const todo = await this.prisma.$transaction(async (tx) => {
-      const movedTodo = await tx.todo.findUnique({ where: { id } });
+      const movedTodo = await tx.todo.findFirst({ where: { id, userId } });
 
       if (!movedTodo) {
         throw new NotFoundException('Todo not found');
       }
 
-      let previousTodo = dto.previousId ? await tx.todo.findUnique({ where: { id: dto.previousId } }) : null;
-      let nextTodo = dto.nextId ? await tx.todo.findUnique({ where: { id: dto.nextId } }) : null;
+      let previousTodo = dto.previousId ? await tx.todo.findFirst({ where: { id: dto.previousId, userId } }) : null;
+      let nextTodo = dto.nextId ? await tx.todo.findFirst({ where: { id: dto.nextId, userId } }) : null;
 
       if (dto.previousId && !previousTodo) {
         throw new BadRequestException('previousId todo not found');
@@ -155,9 +167,9 @@ export class TodosService {
       }
 
       if (this.shouldReindex(previousTodo?.order ?? null, nextTodo?.order ?? null)) {
-        await this.reindexLocalWindow(tx, id, previousTodo?.order ?? null);
-        previousTodo = dto.previousId ? await tx.todo.findUnique({ where: { id: dto.previousId } }) : null;
-        nextTodo = dto.nextId ? await tx.todo.findUnique({ where: { id: dto.nextId } }) : null;
+        await this.reindexLocalWindow(tx, userId, id, previousTodo?.order ?? null);
+        previousTodo = dto.previousId ? await tx.todo.findFirst({ where: { id: dto.previousId, userId } }) : null;
+        nextTodo = dto.nextId ? await tx.todo.findFirst({ where: { id: dto.nextId, userId } }) : null;
       }
 
       const order = this.calculateOrder(previousTodo?.order ?? null, nextTodo?.order ?? null);
@@ -171,13 +183,13 @@ export class TodosService {
     return this.serialize(todo);
   }
 
-  async remove(id: string) {
-    await this.ensureExists(id);
+  async remove(userId: string, id: string) {
+    await this.ensureExists(userId, id);
     await this.prisma.todo.delete({ where: { id } });
   }
 
-  private buildWhere(query: ListTodosDto): Prisma.TodoWhereInput {
-    const filters: Prisma.TodoWhereInput[] = [];
+  private buildWhere(userId: string, query: ListTodosDto): Prisma.TodoWhereInput {
+    const filters: Prisma.TodoWhereInput[] = [{ userId }];
 
     if (query.status !== TodoStatusDto.all) {
       filters.push({ status: this.toPrismaStatus(query.status) });
@@ -195,10 +207,10 @@ export class TodosService {
     return filters.length ? { AND: filters } : {};
   }
 
-  private async ensureExists(id: string) {
+  private async ensureExists(userId: string, id: string) {
     this.validateId(id);
 
-    const todo = await this.prisma.todo.findUnique({ where: { id } });
+    const todo = await this.prisma.todo.findFirst({ where: { id, userId } });
 
     if (!todo) {
       throw new NotFoundException('Todo not found');
@@ -207,8 +219,11 @@ export class TodosService {
     return todo;
   }
 
-  private async nextOrder() {
-    const aggregate = await this.prisma.todo.aggregate({ _max: { order: true } });
+  private async nextOrder(userId: string) {
+    const aggregate = await this.prisma.todo.aggregate({
+      where: { userId },
+      _max: { order: true },
+    });
 
     return (aggregate._max.order ?? 0) + ORDER_STEP;
   }
@@ -241,7 +256,7 @@ export class TodosService {
     return nextOrder - previousOrder <= MIN_ORDER_GAP;
   }
 
-  private async reindexLocalWindow(tx: Prisma.TransactionClient, movedTodoId: string, previousOrder: number | null) {
+  private async reindexLocalWindow(tx: Prisma.TransactionClient, userId: string, movedTodoId: string, previousOrder: number | null) {
     const baseOrder = previousOrder ?? 0;
 
     await tx.$executeRaw`
@@ -253,6 +268,7 @@ export class TodosService {
           SELECT id, "order"
           FROM todos
           WHERE id <> ${movedTodoId}::uuid
+            AND user_id = ${userId}::uuid
             AND "order" > ${baseOrder}::double precision
           ORDER BY "order" ASC, id ASC
           LIMIT ${LOCAL_REINDEX_SIZE}
@@ -278,6 +294,9 @@ export class TodosService {
       order: todo.order,
       dueDateTime: todo.dueDateTime.toISOString(),
       startDateTime: todo.startDateTime.toISOString(),
+      reminderDateTime: todo.reminderDateTime?.toISOString() ?? null,
+      reminderSent: todo.reminderSent,
+      reminderSentAt: todo.reminderSentAt?.toISOString() ?? null,
       color: todo.color,
     };
   }

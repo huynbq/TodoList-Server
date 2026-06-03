@@ -1,4 +1,4 @@
-import { IsDateString, IsEnum, IsHexColor, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsEnum, IsHexColor, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 import { TodoWriteStatusDto } from './todo-status.dto';
 
 export class UpdateTodoDto {
@@ -31,6 +31,18 @@ export class UpdateTodoDto {
   @IsOptional()
   @IsDateString()
   startDateTime?: string;
+
+  @IsOptional()
+  @IsDateString()
+  reminderDateTime?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  reminderSent?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  reminderSentAt?: string | null;
 
   @IsOptional()
   @IsHexColor()

@@ -20,9 +20,30 @@ function validateDatabaseUrl(name: string, value: string | undefined) {
   }
 }
 
+function validateHttpUrl(name: string, value: string | undefined) {
+  if (!value) {
+    throw new Error(`${name} is required`);
+  }
+
+  try {
+    const url = new URL(value);
+
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      throw new Error('invalid protocol');
+    }
+  } catch {
+    throw new Error(`${name} must be a valid HTTP URL`);
+  }
+}
+
 export function validateEnv(config: Env) {
   validateDatabaseUrl('DATABASE_URL', config.DATABASE_URL);
   validateDatabaseUrl('DIRECT_URL', config.DIRECT_URL);
+  validateHttpUrl('SUPABASE_URL', config.SUPABASE_URL);
+
+  if (!config.SUPABASE_PUBLISHABLE_KEY && !config.SUPABASE_ANON_KEY) {
+    throw new Error('SUPABASE_PUBLISHABLE_KEY or SUPABASE_ANON_KEY is required');
+  }
 
   return config;
 }

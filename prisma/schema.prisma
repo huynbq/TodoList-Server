@@ -17,17 +17,40 @@ enum TodoStatus {
 
 model Todo {
   id            String     @id @default(uuid()) @db.Uuid
+  userId        String?    @map("user_id") @db.Uuid
   title         String     @db.VarChar(255)
   description   String     @db.Text
   status        TodoStatus @default(pending)
   order         Float      @default(0)
   dueDateTime   DateTime   @map("due_date_time") @db.Timestamptz(6)
   startDateTime DateTime   @map("start_date_time") @db.Timestamptz(6)
+  reminderDateTime DateTime? @map("reminder_date_time") @db.Timestamptz(6)
+  reminderSent Boolean @default(false) @map("reminder_sent")
+  reminderSentAt DateTime? @map("reminder_sent_at") @db.Timestamptz(6)
   color         String     @default("#3b82f6") @db.VarChar(32)
   createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  reminderNotifications ReminderNotification[]
 
+  @@index([userId, status, order, id], map: "idx_todos_user_status_order_id")
+  @@index([userId, order, id], map: "idx_todos_user_order_id")
   @@index([status, order, id], map: "idx_todos_status_order_id")
   @@index([order, id], map: "idx_todos_order_id")
+  @@index([reminderSent, reminderDateTime], map: "idx_todos_reminder_due")
   @@map("todos")
+}
+
+model ReminderNotification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  todoId    String    @map("todo_id") @db.Uuid
+  title     String    @db.VarChar(255)
+  message   String?   @db.Text
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  todo      Todo      @relation(fields: [todoId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt], map: "idx_reminder_notifications_user_unread")
+  @@index([todoId], map: "idx_reminder_notifications_todo_id")
+  @@map("reminder_notifications")
 }

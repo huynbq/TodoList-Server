@@ -25,6 +25,10 @@ export class CreateTodoDto {
   startDateTime: string;
 
   @IsOptional()
+  @IsDateString()
+  reminderDateTime?: string | null;
+
+  @IsOptional()
   @IsHexColor()
   color = '#3b82f6';
 }
