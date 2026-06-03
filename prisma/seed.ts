@@ -7,6 +7,7 @@ const COLORS = ['#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6', '#3b82f6'
 
 async function main() {
   const count = Number(process.env.SEED_TODOS ?? 1000);
+  const userId = process.env.SEED_USER_ID || undefined;
   const batchSize = 1000;
 
   for (let offset = 0; offset < count; offset += batchSize) {
@@ -21,6 +22,7 @@ async function main() {
         description: faker.lorem.sentences({ min: 1, max: 3 }),
         status: seed % 3 === 0 ? TodoStatus.completed : TodoStatus.pending,
         order,
+        userId,
         dueDateTime: faker.date.soon({ days: 45, refDate: startDate }),
         startDateTime: startDate,
         color: COLORS[seed % COLORS.length],

@@ -59,21 +59,24 @@ export class TodosService {
   }
 
   async create(userId: string, dto: CreateTodoDto) {
-    const order = dto.order ?? (await this.nextOrder(userId));
-    const todo = await this.prisma.todo.create({
-      data: {
-        userId,
-        title: dto.title,
-        description: dto.description,
-        status: this.toPrismaStatus(dto.status),
-        order,
-        dueDateTime: new Date(dto.dueDateTime),
-        startDateTime: new Date(dto.startDateTime),
-        reminderDateTime: dto.reminderDateTime ? new Date(dto.reminderDateTime) : null,
-        reminderSent: false,
-        reminderSentAt: null,
-        color: dto.color,
-      },
+    const todo = await this.prisma.$transaction(async (tx) => {
+      const order = dto.order ?? (await this.nextTopOrder(tx, userId));
+
+      return tx.todo.create({
+        data: {
+          userId,
+          title: dto.title,
+          description: dto.description,
+          status: this.toPrismaStatus(dto.status),
+          order,
+          dueDateTime: new Date(dto.dueDateTime),
+          startDateTime: new Date(dto.startDateTime),
+          reminderDateTime: dto.reminderDateTime ? new Date(dto.reminderDateTime) : null,
+          reminderSent: false,
+          reminderSentAt: null,
+          color: dto.color,
+        },
+      });
     });
 
     return this.serialize(todo);
@@ -219,13 +222,23 @@ export class TodosService {
     return todo;
   }
 
-  private async nextOrder(userId: string) {
-    const aggregate = await this.prisma.todo.aggregate({
+  private async nextTopOrder(tx: Prisma.TransactionClient, userId: string) {
+    const firstTodo = await tx.todo.findFirst({
       where: { userId },
-      _max: { order: true },
+      orderBy: [{ order: 'asc' }, { id: 'asc' }],
+      select: { order: true },
     });
 
-    return (aggregate._max.order ?? 0) + ORDER_STEP;
+    if (!firstTodo) {
+      return ORDER_STEP;
+    }
+
+    if (firstTodo.order <= MIN_ORDER_GAP) {
+      await this.reindexLocalWindow(tx, userId, '00000000-0000-0000-0000-000000000000', null);
+      return ORDER_STEP / 2;
+    }
+
+    return firstTodo.order / 2;
   }
 
   private calculateOrder(previousOrder: number | null, nextOrder: number | null) {
