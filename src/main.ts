@@ -6,11 +6,27 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
-  const frontendOrigin = config.get<string>('FRONTEND_ORIGIN');
+  const configuredOrigins = config
+    .get<string>('FRONTEND_ORIGIN', '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const allowedOrigins = new Set([
+    'http://localhost:5173',
+    'https://chipper-frangollo-0cf31d.netlify.app',
+    ...configuredOrigins,
+  ]);
 
   app.setGlobalPrefix('api');
   app.enableCors({
-    origin: frontendOrigin ? frontendOrigin.split(',').map((origin) => origin.trim()) : true,
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`Origin ${origin} is not allowed by CORS`));
+    },
   });
   app.useGlobalPipes(
     new ValidationPipe({
