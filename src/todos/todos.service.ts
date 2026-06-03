@@ -21,6 +21,8 @@ export class TodosService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(userId: string, query: ListTodosDto) {
+    await this.markOverdueTodos(userId);
+
     const limit = Math.min(query.limit ?? 50, 100);
     const offset = query.offset ?? 0;
     const where = this.buildWhere(userId, query);
@@ -67,7 +69,7 @@ export class TodosService {
           userId,
           title: dto.title,
           description: dto.description,
-          status: this.toPrismaStatus(dto.status),
+          status: this.resolveWriteStatus(dto.status, dto.dueDateTime),
           order,
           dueDateTime: new Date(dto.dueDateTime),
           startDateTime: new Date(dto.startDateTime),
@@ -83,7 +85,7 @@ export class TodosService {
   }
 
   async update(userId: string, id: string, dto: UpdateTodoDto) {
-    await this.ensureExists(userId, id);
+    const current = await this.ensureExists(userId, id);
 
     const reminderDateTimeChanged = dto.reminderDateTime !== undefined;
     const todo = await this.prisma.todo.update({
@@ -91,7 +93,7 @@ export class TodosService {
       data: {
         title: dto.title,
         description: dto.description,
-        status: dto.status ? this.toPrismaStatus(dto.status) : undefined,
+        status: this.resolveUpdateStatus(dto, current.dueDateTime),
         order: dto.order,
         dueDateTime: dto.dueDateTime ? new Date(dto.dueDateTime) : undefined,
         startDateTime: dto.startDateTime ? new Date(dto.startDateTime) : undefined,
@@ -114,7 +116,7 @@ export class TodosService {
     const todo = await this.prisma.todo.update({
       where: { id },
       data: {
-        status: current.status === TodoStatus.completed ? TodoStatus.pending : TodoStatus.completed,
+        status: current.status === TodoStatus.completed ? this.statusForDueDate(current.dueDateTime) : TodoStatus.completed,
       },
     });
 
@@ -294,8 +296,51 @@ export class TodosService {
     `;
   }
 
-  private toPrismaStatus(status: TodoStatusDto.pending | TodoStatusDto.completed | TodoWriteStatusDto): TodoStatus {
-    return status === TodoStatusDto.completed ? TodoStatus.completed : TodoStatus.pending;
+  private resolveWriteStatus(status: TodoWriteStatusDto | undefined, dueDateTime: string) {
+    if (status === TodoWriteStatusDto.completed) {
+      return TodoStatus.completed;
+    }
+
+    return this.statusForDueDate(new Date(dueDateTime));
+  }
+
+  private resolveUpdateStatus(dto: UpdateTodoDto, currentDueDateTime: Date) {
+    if (dto.status === TodoWriteStatusDto.completed) {
+      return TodoStatus.completed;
+    }
+
+    if (dto.status === TodoWriteStatusDto.pending || dto.dueDateTime) {
+      return this.statusForDueDate(dto.dueDateTime ? new Date(dto.dueDateTime) : currentDueDateTime);
+    }
+
+    return undefined;
+  }
+
+  private statusForDueDate(dueDateTime: Date) {
+    return dueDateTime.getTime() <= Date.now() ? TodoStatus.overdue : TodoStatus.pending;
+  }
+
+  private async markOverdueTodos(userId: string) {
+    await this.prisma.todo.updateMany({
+      where: {
+        userId,
+        status: TodoStatus.pending,
+        dueDateTime: { lte: new Date() },
+      },
+      data: { status: TodoStatus.overdue },
+    });
+  }
+
+  private toPrismaStatus(status: TodoStatusDto.pending | TodoStatusDto.overdue | TodoStatusDto.completed): TodoStatus {
+    if (status === TodoStatusDto.completed) {
+      return TodoStatus.completed;
+    }
+
+    if (status === TodoStatusDto.overdue) {
+      return TodoStatus.overdue;
+    }
+
+    return TodoStatus.pending;
   }
 
   private serialize(todo: Todo) {

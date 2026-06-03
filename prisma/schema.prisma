@@ -10,6 +10,7 @@ datasource db {
 
 enum TodoStatus {
   pending
+  overdue
   completed
 
   @@map("todo_status")

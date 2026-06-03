@@ -1,10 +1,23 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { ReminderNotification } from '@prisma/client';
+import { TodoStatus } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
+
+type ReminderNotificationRecord = {
+  id: string;
+  userId: string;
+  todoId: string;
+  title: string;
+  message: string | null;
+  readAt: Date | null;
+  createdAt: Date;
+};
 
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+  private isCreatingDueReminders = false;
+
   constructor(private readonly prisma: PrismaService) {}
 
   async listUnread(userId: string) {
@@ -36,38 +49,60 @@ export class NotificationsService {
 
   @Cron(CronExpression.EVERY_30_SECONDS)
   async createDueReminderNotifications() {
-    const dueTodos = await this.prisma.todo.findMany({
-      where: {
-        userId: { not: null },
-        status: 'pending',
-        reminderSent: false,
-        reminderDateTime: { lte: new Date() },
-      },
-      orderBy: [{ reminderDateTime: 'asc' }, { order: 'asc' }, { id: 'asc' }],
-      take: 100,
-    });
-
-    if (!dueTodos.length) {
+    if (this.isCreatingDueReminders) {
       return;
     }
 
-    await this.prisma.$transaction([
-      this.prisma.reminderNotification.createMany({
-        data: dueTodos.map((todo) => ({
-          userId: todo.userId!,
-          todoId: todo.id,
-          title: todo.title,
-          message: todo.description,
-        })),
-      }),
-      this.prisma.todo.updateMany({
-        where: { id: { in: dueTodos.map((todo) => todo.id) } },
-        data: { reminderSent: true, reminderSentAt: new Date() },
-      }),
-    ]);
+    this.isCreatingDueReminders = true;
+
+    try {
+      await this.prisma.todo.updateMany({
+        where: {
+          status: TodoStatus.pending,
+          dueDateTime: { lte: new Date() },
+        },
+        data: { status: TodoStatus.overdue },
+      });
+
+      const dueTodos = await this.prisma.todo.findMany({
+        where: {
+          userId: { not: null },
+          status: { in: [TodoStatus.pending, TodoStatus.overdue] },
+          reminderSent: false,
+          reminderDateTime: { lte: new Date() },
+        },
+        orderBy: [{ reminderDateTime: 'asc' }, { order: 'asc' }, { id: 'asc' }],
+        take: 100,
+      });
+
+      if (!dueTodos.length) {
+        return;
+      }
+
+      await this.prisma.$transaction([
+        this.prisma.reminderNotification.createMany({
+          data: dueTodos.map((todo) => ({
+            userId: todo.userId!,
+            todoId: todo.id,
+            title: todo.title,
+            message: todo.description,
+          })),
+        }),
+        this.prisma.todo.updateMany({
+          where: { id: { in: dueTodos.map((todo) => todo.id) } },
+          data: { reminderSent: true, reminderSentAt: new Date() },
+        }),
+      ]);
+    } catch (error) {
+      this.logger.warn(
+        `Skipped due reminder check because the database was unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      this.isCreatingDueReminders = false;
+    }
   }
 
-  private serialize(notification: ReminderNotification) {
+  private serialize(notification: ReminderNotificationRecord) {
     return {
       id: notification.id,
       userId: notification.userId,
