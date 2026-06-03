@@ -1,0 +1,33 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum TodoStatus {
+  pending
+  completed
+
+  @@map("todo_status")
+}
+
+model Todo {
+  id            String     @id @default(uuid()) @db.Uuid
+  title         String     @db.VarChar(255)
+  description   String     @db.Text
+  status        TodoStatus @default(pending)
+  order         Float      @default(0)
+  dueDateTime   DateTime   @map("due_date_time") @db.Timestamptz(6)
+  startDateTime DateTime   @map("start_date_time") @db.Timestamptz(6)
+  color         String     @default("#3b82f6") @db.VarChar(32)
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([status, order, id], map: "idx_todos_status_order_id")
+  @@index([order, id], map: "idx_todos_order_id")
+  @@map("todos")
+}
